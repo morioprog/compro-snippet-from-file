@@ -2,6 +2,11 @@
   "name": "compro-snippet-from-file",
   "displayName": "compro-snippet-from-file",
   "description": "Insert snippets from file (and automatically fold regions)",
+  "publisher": "morioprog",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morioprog/compro-snippet-from-file"
+  },
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.53.0"
