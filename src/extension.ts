@@ -11,6 +11,10 @@ import {
 import { promises } from "fs";
 import { join } from "path";
 
+interface QuickPickItemWithCode extends QuickPickItem {
+  code: string;
+}
+
 const parseExtension = (filename: string): string | undefined => {
   return /\.([^.]*)$/.exec(filename)?.[1];
 };
@@ -57,8 +61,8 @@ export async function activate(context: ExtensionContext) {
   // Traverse through all children
   const retrieveQuickPicks = async (
     dir: string,
-    quickPicks: Array<QuickPickItem>
-  ): Promise<Array<QuickPickItem>> => {
+    quickPicks: Array<QuickPickItemWithCode>
+  ): Promise<Array<QuickPickItemWithCode>> => {
     // Ignore
     if (ignoringDirectory.includes(dir)) {
       return quickPicks;
@@ -81,7 +85,7 @@ export async function activate(context: ExtensionContext) {
         quickPicks.push({
           label: parseBrief(code) ?? codePath,
           description: codePath,
-          detail: code,
+          code: code,
         });
       }
     }
@@ -90,18 +94,20 @@ export async function activate(context: ExtensionContext) {
     }
     return quickPicks;
   };
-  const quickPickItems: Array<QuickPickItem> = await retrieveQuickPicks("", []);
+  const quickPickItems: Array<QuickPickItemWithCode> = await retrieveQuickPicks(
+    "",
+    []
+  );
 
   // Insert a snippet to vscode.TextEditor
   const insertSnippet = async (textEditor: TextEditor): Promise<void> => {
     // Show prompt to select a snippet
-    const quickPick: QuickPickItem | undefined = await window.showQuickPick(
-      quickPickItems,
-      {
-        placeHolder: "Select a snippet to insert",
-        matchOnDescription: true,
-      }
-    );
+    const quickPick:
+      | QuickPickItemWithCode
+      | undefined = await window.showQuickPick(quickPickItems, {
+      placeHolder: "Select a snippet to insert",
+      matchOnDescription: true,
+    });
 
     // Escaped
     if (quickPick === undefined) {
@@ -130,7 +136,7 @@ export async function activate(context: ExtensionContext) {
       : "";
 
     textEditor.insertSnippet(
-      new SnippetString(header + quickPick.detail + footer)
+      new SnippetString(header + quickPick.code + footer)
     );
   };
 
