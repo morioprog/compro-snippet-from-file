@@ -1,26 +1,165 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
-import * as vscode from 'vscode';
+import {
+  ExtensionContext,
+  workspace,
+  TextEditor,
+  window,
+  commands,
+  WorkspaceConfiguration,
+  QuickPickItem,
+  SnippetString,
+} from "vscode";
+import { promises } from "fs";
+import { join } from "path";
 
-// this method is called when your extension is activated
-// your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
-	
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "compro-snippet-from-file" is now active!');
-
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	let disposable = vscode.commands.registerCommand('compro-snippet-from-file.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from compro-snippet-from-file!');
-	});
-
-	context.subscriptions.push(disposable);
+interface QuickPickItemWithCode extends QuickPickItem {
+  code: string;
 }
 
-// this method is called when your extension is deactivated
+const parseExtension = (filename: string): string | undefined => {
+  return /\.([^.]*)$/.exec(filename)?.[1];
+};
+
+const parseBrief = (code: string): string | undefined => {
+  return /@brief (.*)\n/m.exec(code)?.[1];
+};
+
+export async function activate(context: ExtensionContext) {
+  const pkg: string = "compro-snippet-from-file";
+  const SNIPPETPATH: string = "<SNIPPETPATH>";
+
+  // Load configurations
+  const config: WorkspaceConfiguration = workspace.getConfiguration(pkg);
+  const snippetDirectory: string = config.get("snippetDirectory", "");
+  if (snippetDirectory === "") {
+    window.showErrorMessage(
+      `Failed to load snippets. Please specify '${pkg}.snippetDirectory' in the User Settings.`
+    );
+    return;
+  }
+  const addRegion: boolean = config.get("addRegion", false);
+  const beginRegion: { [key: string]: string } = config.get("beginRegion", {});
+  const endRegion: { [key: string]: string } = config.get("endRegion", {});
+  const addRegionExcept: Array<string> = config.get("addRegionExcept", []);
+  const ignoringDirectory: Array<string> = config.get("ignoringDirectory", []);
+  const snippetExtensions: Array<string> = config.get("snippetExtensions", []);
+
+  // Load a snippet
+  const loadSnippetCode = async (dir: string): Promise<string | undefined> => {
+    const absPath: string = join(snippetDirectory, dir);
+    try {
+      let code: string = await promises.readFile(absPath, "utf8");
+      if (code.slice(-1) !== "\n") {
+        code += "\n";
+      }
+      return code;
+    } catch (err) {
+      window.showErrorMessage(`Failed to load the snippet: ${dir} (${err})`);
+      return undefined;
+    }
+  };
+
+  // Traverse through all children
+  const retrieveQuickPicks = async (
+    dir: string,
+    quickPicks: Array<QuickPickItemWithCode>
+  ): Promise<Array<QuickPickItemWithCode>> => {
+    // Ignore
+    if (ignoringDirectory.includes(dir)) {
+      return quickPicks;
+    }
+
+    const dirents = await promises.readdir(join(snippetDirectory, dir), {
+      withFileTypes: true,
+    });
+    const nextDirectories: Array<string> = [];
+    for (const dirent of dirents) {
+      if (dirent.isDirectory()) {
+        nextDirectories.push(join(dir, dirent.name));
+      }
+      if (
+        dirent.isFile() &&
+        (snippetExtensions.length === 0 ||
+          snippetExtensions.includes(parseExtension(dirent.name) ?? ""))
+      ) {
+        const codePath: string = join(dir, dirent.name);
+        const code: string = (await loadSnippetCode(codePath)) ?? "";
+        quickPicks.push({
+          label: parseBrief(code) ?? codePath,
+          description: codePath,
+          code: code,
+        });
+      }
+    }
+    for (const nextDirectory of nextDirectories) {
+      quickPicks = await retrieveQuickPicks(nextDirectory, quickPicks);
+    }
+    return quickPicks;
+  };
+  const quickPickItems: Array<QuickPickItemWithCode> = await retrieveQuickPicks(
+    "",
+    []
+  );
+
+  // Insert a snippet to vscode.TextEditor
+  const insertSnippet = async (textEditor: TextEditor): Promise<void> => {
+    // Show prompt to select a snippet
+    const quickPick: QuickPickItemWithCode | undefined =
+      await window.showQuickPick(quickPickItems, {
+        placeHolder: "Select a snippet to insert",
+        matchOnDescription: true,
+      });
+
+    // Escaped
+    if (quickPick === undefined) {
+      return;
+    }
+
+    // Prepare region delimiter
+    const extension: string =
+      parseExtension(textEditor.document.fileName) ?? "";
+    const insertRegion: boolean =
+      addRegion &&
+      !addRegionExcept.includes(quickPick.description ?? "") &&
+      extension in beginRegion &&
+      extension in endRegion;
+    const header: string = insertRegion
+      ? `${beginRegion[extension].replace(
+          SNIPPETPATH,
+          quickPick.description ?? SNIPPETPATH
+        )}\n`
+      : "";
+    const footer: string = insertRegion
+      ? `${endRegion[extension].replace(
+          SNIPPETPATH,
+          quickPick.description ?? SNIPPETPATH
+        )}\n`
+      : "";
+
+    textEditor.insertSnippet(
+      new SnippetString(header + quickPick.code + footer)
+    );
+  };
+
+  // Insert snippet
+  context.subscriptions.push(
+    commands.registerTextEditorCommand(
+      `${pkg}.insert-snippet`,
+      async (textEditor: TextEditor) => {
+        await insertSnippet(textEditor);
+      }
+    )
+  );
+
+  // Insert snippet and fold
+  context.subscriptions.push(
+    commands.registerTextEditorCommand(
+      `${pkg}.insert-snippet-and-fold`,
+      async (textEditor: TextEditor) => {
+        await insertSnippet(textEditor);
+        commands.executeCommand(`editor.foldAllMarkerRegions`);
+      }
+    )
+  );
+}
+
 export function deactivate() {}
